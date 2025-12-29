@@ -1,1 +1,228 @@
-#!/usr/bin/env python3\n\"\"\"\nCOLAB PHASE1 Remote Execution Script\n\n执行方式 (Colab中一行命令):\n!curl -s https://raw.githubusercontent.com/caizongxun/swing-reversal-prediction/main/colab_phase1_remote.py | python3\n\n功能:\n1. 自动下载K线数据 (HuggingFace)\n2. 标准化列名\n3. 执行PHASE1反转点检测\n4. 输出标记数据集\n5. 生成统计摘要\n\n\"\"\"\n\nimport os\nimport sys\nimport subprocess\nimport pandas as pd\nimport numpy as np\nimport warnings\nwarnings.filterwarnings('ignore')\n\nprint(\"=\"*70)\nprint(\"PHASE1: 反转点检测 - 远程执行版\")\nprint(\"=\"*70)\n\n# ============================================================\n# [1/5] 安装依赖\n# ============================================================\nprint(\"\\n[1/5] 安装依赖库...\")\npackages = [\"datasets\", \"huggingface-hub\", \"pandas\", \"numpy\", \"scikit-learn\"]\nfor package in packages:\n    subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\", \"-q\", package])\nprint(\"依赖安装完成\")\n\n# ============================================================\n# [2/5] 下载HuggingFace K线数据\n# ============================================================\nprint(\"\\n[2/5] 从HuggingFace下载K线数据...\")\n\nfrom huggingface_hub import hf_hub_download\n\ntry:\n    csv_file = hf_hub_download(\n        repo_id=\"zongowo111/cpb-models\",\n        filename=\"klines_binance_us/BTCUSDT/BTCUSDT_15m_binance_us.csv\",\n        repo_type=\"dataset\"\n    )\n    print(f\"成功下载: {csv_file}\")\n    df = pd.read_csv(csv_file)\nexcept Exception as e:\n    print(f\"下载失败: {str(e)[:100]}\")\n    sys.exit(1)\n\n# ============================================================\n# [3/5] 数据预处理与指标计算\n# ============================================================\nprint(\"\\n[3/5] 计算技术指标...\")\n\n# 列名标准化\ndf['close'] = pd.to_numeric(df['open_time'] if 'open_time' in df.columns else df['timestamp'])\ndf['close'] = pd.to_numeric(df['close'])\ndf['volume'] = pd.to_numeric(df['volume'])\ndf['open'] = pd.to_numeric(df['open'])\ndf['high'] = pd.to_numeric(df['high'])\ndf['low'] = pd.to_numeric(df['low'])\n\n# 重命名列\nif 'open_time' in df.columns:\n    df['timestamp'] = df['open_time']\n\nprint(f\"数据形状: {df.shape}\")\nprint(f\"日期范围: {df['timestamp'].iloc[0]} 到 {df['timestamp'].iloc[-1]}\")\n\n# 计算技术指标\ndf['SMA20'] = df['close'].rolling(20).mean()\ndf['SMA50'] = df['close'].rolling(50).mean()\ndf['SMA200'] = df['close'].rolling(200).mean()\n\n# RSI\ndelta = df['close'].diff()\ngain = (delta.where(delta > 0, 0)).rolling(window=14).mean()\nloss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()\nrs = gain / loss\ndf['RSI'] = 100 - (100 / (1 + rs))\n\n# MACD\nexp1 = df['close'].ewm(span=12, adjust=False).mean()\nexp2 = df['close'].ewm(span=26, adjust=False).mean()\ndf['MACD'] = exp1 - exp2\ndf['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()\ndf['MACD_Hist'] = df['MACD'] - df['Signal']\n\n# 布林带\nsma = df['close'].rolling(20).mean()\nstd = df['close'].rolling(20).std()\ndf['BB_Upper'] = sma + 2 * std\ndf['BB_Lower'] = sma - 2 * std\ndf['BB_Pct'] = (df['close'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])\n\n# 支撑压力\ndf['Support'] = df['low'].rolling(20).min()\ndf['Resistance'] = df['high'].rolling(20).max()\n\n# 成交量Z分数\nvol_sma = df['volume'].rolling(20).mean()\nvol_std = df['volume'].rolling(20).std()\ndf['Volume_Z'] = (df['volume'] - vol_sma) / vol_std\n\n# 制度判断\nsma20_slope = (df['SMA20'] - df['SMA20'].shift(5)) / df['SMA20'].shift(5) * 100\ndf['Trend_Slope'] = sma20_slope\ndf['Regime'] = 'Range'\ndf.loc[df['Trend_Slope'] > 1.0, 'Regime'] = 'Uptrend'\ndf.loc[df['Trend_Slope'] < -1.0, 'Regime'] = 'Downtrend'\n\nprint(\"技术指标计算完成\")\n\n# ============================================================\n# [4/5] PHASE1反转点检测\n# ============================================================\nprint(\"\\n[4/5] 执行PHASE1反转点检测...\")\n\nreversals = []\nreversal_window = 3\nlookback = 20\n\n# 波段反转\nfor i in range(reversal_window, len(df) - reversal_window):\n    current = df.iloc[i]\n    \n    if pd.isna(current['BB_Lower']) or pd.isna(current['RSI']):\n        continue\n    \n    # 支撑反转\n    if (current['BB_Pct'] < 0.2 and current['RSI'] < 40):\n        future_high = df.iloc[i:i+reversal_window+1]['high'].max()\n        if future_high > current['close'] * 1.002:\n            reversals.append({\n                'index': i,\n                'timestamp': current['timestamp'],\n                'price': current['close'],\n                'type': 'Support',\n                'regime': 'Range',\n                'rsi': current['RSI'],\n                'bb_pct': current['BB_Pct'],\n                'confirmation': 'Bounce'\n            })\n    \n    # 压力反转\n    if (current['BB_Pct'] > 0.8 and current['RSI'] > 60):\n        future_low = df.iloc[i:i+reversal_window+1]['low'].min()\n        if future_low < current['close'] * 0.998:\n            reversals.append({\n                'index': i,\n                'timestamp': current['timestamp'],\n                'price': current['close'],\n                'type': 'Resistance',\n                'regime': 'Range',\n                'rsi': current['RSI'],\n                'bb_pct': current['BB_Pct'],\n                'confirmation': 'Pullback'\n            })\n\n# 趋势反转\nfor i in range(reversal_window * 2, len(df) - reversal_window):\n    current = df.iloc[i]\n    \n    if pd.isna(current['MACD_Hist']) or pd.isna(current['Volume_Z']):\n        continue\n    \n    if i > 0:\n        prev_regime = df.iloc[i-5:i]['Regime'].value_counts().index[0]\n        if prev_regime in ['Downtrend', 'Range']:\n            if (current['MACD_Hist'] > 0 and \n                df.iloc[i-1]['MACD_Hist'] <= 0 and\n                current['Volume_Z'] > 1.5):\n                reversals.append({\n                    'index': i,\n                    'timestamp': current['timestamp'],\n                    'price': current['close'],\n                    'type': 'Trend_Start_Up',\n                    'regime': 'Trend',\n                    'signal': 'MACD_Crossover + Volume',\n                    'macd_hist': current['MACD_Hist'],\n                    'volume_z': current['Volume_Z']\n                })\n        \n        curr_regime = df.iloc[i-5:i]['Regime'].value_counts().index[0]\n        if curr_regime == 'Uptrend':\n            if (current['MACD_Hist'] < 0 and \n                df.iloc[i-1]['MACD_Hist'] >= 0 and\n                current['RSI'] > 50):\n                reversals.append({\n                    'index': i,\n                    'timestamp': current['timestamp'],\n                    'price': current['close'],\n                    'type': 'Trend_End_Down',\n                    'regime': 'Trend',\n                    'signal': 'MACD_Divergence',\n                    'macd_hist': current['MACD_Hist'],\n                    'rsi': current['RSI']\n                })\n\nreversals_df = pd.DataFrame(reversals).sort_values('index').reset_index(drop=True)\nprint(f\"检测到 {len(reversals_df)} 个反转点\")\n\n# ============================================================\n# [5/5] 生成标记数据集\n# ============================================================\nprint(\"\\n[5/5] 生成标记数据集...\")\n\ndf['Reversal_Label'] = 0\ndf['Reversal_Type'] = 'None'\ndf['Reversal_Strength'] = 0.0\n\nfor idx, row in reversals_df.iterrows():\n    i = row['index']\n    if i < len(df):\n        df.at[i, 'Reversal_Label'] = 1\n        df.at[i, 'Reversal_Type'] = row['type']\n        \n        if 'rsi' in row and not pd.isna(row['rsi']):\n            strength = abs(row['rsi'] - 50) / 50\n            df.at[i, 'Reversal_Strength'] = min(strength, 1.0)\n\n# 保存结果\noutput_file = 'labeled_klines_phase1.csv'\ncols = ['timestamp', 'open', 'high', 'low', 'close', 'volume',\n        'SMA20', 'SMA50', 'SMA200', 'RSI', 'MACD', 'MACD_Hist',\n        'BB_Upper', 'BB_Lower', 'BB_Pct', 'Support', 'Resistance',\n        'Volume_Z', 'Regime', 'Reversal_Label', 'Reversal_Type', 'Reversal_Strength']\n\nexisting_cols = [c for c in cols if c in df.columns]\ndf[existing_cols].to_csv(output_file, index=False)\n\nprint(f\"\\n已保存到: {output_file}\")\n\n# ============================================================\n# 统计摘要\n# ============================================================\nprint(\"\\n\" + \"=\"*70)\nprint(\"PHASE1 检测结果摘要\")\nprint(\"=\"*70)\nprint(f\"\\n总反转点数: {len(reversals_df)}\")\nprint(f\"\\n类型分布:\")\nif len(reversals_df) > 0:\n    print(reversals_df['type'].value_counts())\nelse:\n    print(\"未检测到反转点\")\n\nprint(f\"\\n前 10 个反转点:\")\nif len(reversals_df) > 0:\n    print(reversals_df[['index', 'timestamp', 'type', 'price']].head(10))\n\nprint(f\"\\n制度分布:\")\nprint(df['Regime'].value_counts())\n\nprint(f\"\\n已完成PHASE1! 继续下一步: PHASE2特征提取\")\nprint(\"=\"*70)\n
+#!/usr/bin/env python3
+"""
+COLAB PHASE1 Remote Execution Script
+
+Execution method (one-liner in Colab):
+!curl -s https://raw.githubusercontent.com/caizongxun/swing-reversal-prediction/main/colab_phase1_remote.py | python3
+
+Features:
+1. Auto download K-line data (HuggingFace)
+2. Standardize column names
+3. Execute PHASE1 reversal detection
+4. Output labeled dataset
+5. Generate summary statistics
+"""
+
+import os
+import sys
+import subprocess
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+
+print("="*70)
+print("PHASE1: Reversal Point Detection - Remote Execution")
+print("="*70)
+
+print("\n[1/5] Installing dependencies...")
+packages = ["datasets", "huggingface-hub", "pandas", "numpy", "scikit-learn"]
+for package in packages:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", package])
+print("Dependencies installed")
+
+print("\n[2/5] Downloading K-line data from HuggingFace...")
+
+from huggingface_hub import hf_hub_download
+
+try:
+    csv_file = hf_hub_download(
+        repo_id="zongowo111/cpb-models",
+        filename="klines_binance_us/BTCUSDT/BTCUSDT_15m_binance_us.csv",
+        repo_type="dataset"
+    )
+    print(f"Successfully downloaded: {csv_file}")
+    df = pd.read_csv(csv_file)
+except Exception as e:
+    print(f"Download failed: {str(e)[:100]}")
+    sys.exit(1)
+
+print("\n[3/5] Calculating technical indicators...")
+
+df['close'] = pd.to_numeric(df['close'])
+df['volume'] = pd.to_numeric(df['volume'])
+df['open'] = pd.to_numeric(df['open'])
+df['high'] = pd.to_numeric(df['high'])
+df['low'] = pd.to_numeric(df['low'])
+
+if 'open_time' in df.columns:
+    df['timestamp'] = df['open_time']
+
+print(f"Data shape: {df.shape}")
+print(f"Date range: {df['timestamp'].iloc[0]} to {df['timestamp'].iloc[-1]}")
+
+df['SMA20'] = df['close'].rolling(20).mean()
+df['SMA50'] = df['close'].rolling(50).mean()
+df['SMA200'] = df['close'].rolling(200).mean()
+
+delta = df['close'].diff()
+gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+rs = gain / loss
+df['RSI'] = 100 - (100 / (1 + rs))
+
+exp1 = df['close'].ewm(span=12, adjust=False).mean()
+exp2 = df['close'].ewm(span=26, adjust=False).mean()
+df['MACD'] = exp1 - exp2
+df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+df['MACD_Hist'] = df['MACD'] - df['Signal']
+
+sma = df['close'].rolling(20).mean()
+std = df['close'].rolling(20).std()
+df['BB_Upper'] = sma + 2 * std
+df['BB_Lower'] = sma - 2 * std
+df['BB_Pct'] = (df['close'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])
+
+df['Support'] = df['low'].rolling(20).min()
+df['Resistance'] = df['high'].rolling(20).max()
+
+vol_sma = df['volume'].rolling(20).mean()
+vol_std = df['volume'].rolling(20).std()
+df['Volume_Z'] = (df['volume'] - vol_sma) / vol_std
+
+sma20_slope = (df['SMA20'] - df['SMA20'].shift(5)) / df['SMA20'].shift(5) * 100
+df['Trend_Slope'] = sma20_slope
+df['Regime'] = 'Range'
+df.loc[df['Trend_Slope'] > 1.0, 'Regime'] = 'Uptrend'
+df.loc[df['Trend_Slope'] < -1.0, 'Regime'] = 'Downtrend'
+
+print("Technical indicators calculated")
+
+print("\n[4/5] Executing PHASE1 reversal detection...")
+
+reversals = []
+reversal_window = 3
+lookback = 20
+
+for i in range(reversal_window, len(df) - reversal_window):
+    current = df.iloc[i]
+    
+    if pd.isna(current['BB_Lower']) or pd.isna(current['RSI']):
+        continue
+    
+    if (current['BB_Pct'] < 0.2 and current['RSI'] < 40):
+        future_high = df.iloc[i:i+reversal_window+1]['high'].max()
+        if future_high > current['close'] * 1.002:
+            reversals.append({
+                'index': i,
+                'timestamp': current['timestamp'],
+                'price': current['close'],
+                'type': 'Support',
+                'regime': 'Range',
+                'rsi': current['RSI'],
+                'bb_pct': current['BB_Pct'],
+                'confirmation': 'Bounce'
+            })
+    
+    if (current['BB_Pct'] > 0.8 and current['RSI'] > 60):
+        future_low = df.iloc[i:i+reversal_window+1]['low'].min()
+        if future_low < current['close'] * 0.998:
+            reversals.append({
+                'index': i,
+                'timestamp': current['timestamp'],
+                'price': current['close'],
+                'type': 'Resistance',
+                'regime': 'Range',
+                'rsi': current['RSI'],
+                'bb_pct': current['BB_Pct'],
+                'confirmation': 'Pullback'
+            })
+
+for i in range(reversal_window * 2, len(df) - reversal_window):
+    current = df.iloc[i]
+    
+    if pd.isna(current['MACD_Hist']) or pd.isna(current['Volume_Z']):
+        continue
+    
+    if i > 0:
+        prev_regime = df.iloc[i-5:i]['Regime'].value_counts().index[0]
+        if prev_regime in ['Downtrend', 'Range']:
+            if (current['MACD_Hist'] > 0 and 
+                df.iloc[i-1]['MACD_Hist'] <= 0 and
+                current['Volume_Z'] > 1.5):
+                reversals.append({
+                    'index': i,
+                    'timestamp': current['timestamp'],
+                    'price': current['close'],
+                    'type': 'Trend_Start_Up',
+                    'regime': 'Trend',
+                    'signal': 'MACD_Crossover + Volume',
+                    'macd_hist': current['MACD_Hist'],
+                    'volume_z': current['Volume_Z']
+                })
+        
+        curr_regime = df.iloc[i-5:i]['Regime'].value_counts().index[0]
+        if curr_regime == 'Uptrend':
+            if (current['MACD_Hist'] < 0 and 
+                df.iloc[i-1]['MACD_Hist'] >= 0 and
+                current['RSI'] > 50):
+                reversals.append({
+                    'index': i,
+                    'timestamp': current['timestamp'],
+                    'price': current['close'],
+                    'type': 'Trend_End_Down',
+                    'regime': 'Trend',
+                    'signal': 'MACD_Divergence',
+                    'macd_hist': current['MACD_Hist'],
+                    'rsi': current['RSI']
+                })
+
+reversals_df = pd.DataFrame(reversals).sort_values('index').reset_index(drop=True)
+print(f"Detected {len(reversals_df)} reversal points")
+
+print("\n[5/5] Generating labeled dataset...")
+
+df['Reversal_Label'] = 0
+df['Reversal_Type'] = 'None'
+df['Reversal_Strength'] = 0.0
+
+for idx, row in reversals_df.iterrows():
+    i = row['index']
+    if i < len(df):
+        df.at[i, 'Reversal_Label'] = 1
+        df.at[i, 'Reversal_Type'] = row['type']
+        
+        if 'rsi' in row and not pd.isna(row['rsi']):
+            strength = abs(row['rsi'] - 50) / 50
+            df.at[i, 'Reversal_Strength'] = min(strength, 1.0)
+
+output_file = 'labeled_klines_phase1.csv'
+cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume',
+        'SMA20', 'SMA50', 'SMA200', 'RSI', 'MACD', 'MACD_Hist',
+        'BB_Upper', 'BB_Lower', 'BB_Pct', 'Support', 'Resistance',
+        'Volume_Z', 'Regime', 'Reversal_Label', 'Reversal_Type', 'Reversal_Strength']
+
+existing_cols = [c for c in cols if c in df.columns]
+df[existing_cols].to_csv(output_file, index=False)
+
+print(f"\nSaved to: {output_file}")
+
+print("\n" + "="*70)
+print("PHASE1 Detection Results Summary")
+print("="*70)
+print(f"\nTotal reversal points: {len(reversals_df)}")
+print(f"\nType distribution:")
+if len(reversals_df) > 0:
+    print(reversals_df['type'].value_counts())
+else:
+    print("No reversal points detected")
+
+print(f"\nTop 10 reversal points:")
+if len(reversals_df) > 0:
+    print(reversals_df[['index', 'timestamp', 'type', 'price']].head(10))
+
+print(f"\nRegime distribution:")
+print(df['Regime'].value_counts())
+
+print(f"\nPHASE1 completed! Next: PHASE2 Feature extraction")
+print("="*70)
