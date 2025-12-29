@@ -54,9 +54,11 @@ REPO_ID = "zongowo111/cpb-models"
 PAIR = "BTCUSDT"
 TIMEFRAME = "15m"
 
-filename = f"{PAIR}/{PAIR}_{TIMEFRAME}_binance_us.csv"
+# 正確的路徑：klines/BTCUSDT/BTCUSDT_15m_binance_us.csv
+filename = f"klines_binance_us/{PAIR}/{PAIR}_{TIMEFRAME}_binance_us.csv"
 
 print(f"下載: {PAIR} {TIMEFRAME}...")
+print(f"網路路徑: {filename}")
 
 try:
     csv_path = hf_hub_download(
@@ -72,9 +74,11 @@ try:
     df_raw = pd.read_csv(csv_path)
     print(f"  數據大小: {df_raw.shape}")
     print(f"  時間範圍: {df_raw.iloc[0][0]} 至 {df_raw.iloc[-1][0]}")
+    print(f"  列名: {df_raw.columns.tolist()[:8]}")
     
 except Exception as e:
     print(f"✗ 下載失敗: {e}")
+    print(f"提示: 詳後再試一次或使用別的網路路徑")
     sys.exit(1)
 
 # ============================================================================
