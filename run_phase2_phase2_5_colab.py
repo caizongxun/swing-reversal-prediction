@@ -29,7 +29,7 @@ else:
     os.system('cd swing-reversal-prediction && git pull')
 
 os.chdir('swing-reversal-prediction')
-print("✓ 這動完成")
+print("✓ 動作完成")
 
 # ============================================================================
 # STEP 2: 安裝依賴
@@ -74,7 +74,7 @@ try:
     print(f"  時間範圍: {df_raw.iloc[0][0]} 至 {df_raw.iloc[-1][0]}")
     
 except Exception as e:
-    print(f"⌫ 下載失敗: {e}")
+    print(f"✗ 下載失敗: {e}")
     sys.exit(1)
 
 # ============================================================================
@@ -189,9 +189,8 @@ except ImportError:
 print("\n" + "="*70)
 print("✅ Phase 2 + Phase 2.5 完成！")
 print("="*70)
-print(f"\
-下一步：Phase 3 - 特徵探索 & 模型訓練
-- 計算特徵重要性 (Importance)
-- 發現自動公式 (符號回歸)
-- 訓練特後一獲收被：Random Forest / Decision Tree
-")
+print("\n下一步：Phase 3 - 特徵探索 & 模型訓練")
+print("- 計算特徵重要性 (Importance)")
+print("- 發現自動公式 (符號回歸)")
+print("- 訓練特後一獲收被：Random Forest / Decision Tree")
+print("\n如需進行 Phase 3，執行: python feature_exploration.py")
