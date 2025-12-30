@@ -7,11 +7,10 @@ Usage in Colab cell (ONE LINE):
 # Example 1: Default parameters (lookback=5, confirm_local=True)
 LOOKBACK = 5
 CONFIRM_LOCAL = True
-exec(open('https://raw.githubusercontent.com/caizongxun/swing-reversal-prediction/main/colab_phase1_with_visualization.py').read())
 
-# Or directly in cell:
-LOOKBACK = 5
-CONFIRM_LOCAL = True
+# 下载并运行脚本
+!wget -q https://raw.githubusercontent.com/caizongxun/swing-reversal-prediction/main/colab_phase1_with_visualization.py -O phase1.py
+%run phase1.py
 """
 
 import pandas as pd
@@ -19,6 +18,7 @@ import numpy as np
 import warnings
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
+import sys
 
 warnings.filterwarnings('ignore')
 
@@ -63,14 +63,62 @@ if 'timestamp' not in df.columns:
 print(f"数据大小: {df.shape}")
 print(f"时间范围: {str(df['timestamp'].iloc[0])[:19]} 至 {str(df['timestamp'].iloc[-1])[:19]}")
 
-# 使用Cell中的参数
-try:
-    lookback = LOOKBACK
-    confirm_local = CONFIRM_LOCAL
-except NameError:
-    # 默认参数
+# 从父级命名空间读取参数
+print("\n[读取参数]")
+parent_locals = sys._getframe(1).f_locals
+print(f"父级变量可用: {list(parent_locals.keys())[:5]}...")
+
+# 尝试从多个地方读取参数
+lookback = None
+confirm_local = None
+
+# 方法1: 从父级frame读取
+if 'LOOKBACK' in parent_locals:
+    lookback = parent_locals['LOOKBACK']
+    print(f"从父级frame读取 LOOKBACK = {lookback}")
+
+if 'CONFIRM_LOCAL' in parent_locals:
+    confirm_local = parent_locals['CONFIRM_LOCAL']
+    print(f"从父级frame读取 CONFIRM_LOCAL = {confirm_local}")
+
+# 方法2: 尝试从全局命名空间读取
+if lookback is None:
+    try:
+        import __main__
+        if hasattr(__main__, 'LOOKBACK'):
+            lookback = __main__.LOOKBACK
+            print(f"从__main__读取 LOOKBACK = {lookback}")
+    except:
+        pass
+
+if confirm_local is None:
+    try:
+        import __main__
+        if hasattr(__main__, 'CONFIRM_LOCAL'):
+            confirm_local = __main__.CONFIRM_LOCAL
+            print(f"从__main__读取 CONFIRM_LOCAL = {confirm_local}")
+    except:
+        pass
+
+# 方法3: 从globals读取
+if lookback is None and 'LOOKBACK' in globals():
+    lookback = globals()['LOOKBACK']
+    print(f"从globals读取 LOOKBACK = {lookback}")
+
+if confirm_local is None and 'CONFIRM_LOCAL' in globals():
+    confirm_local = globals()['CONFIRM_LOCAL']
+    print(f"从globals读取 CONFIRM_LOCAL = {confirm_local}")
+
+# 如果还没读到，使用默认值
+if lookback is None:
     lookback = 5
+    print(f"使用默认 LOOKBACK = {lookback}")
+
+if confirm_local is None:
     confirm_local = True
+    print(f"使用默认 CONFIRM_LOCAL = {confirm_local}")
+
+print(f"\n最终参数: lookback={lookback}, confirm_local={confirm_local}")
 
 print(f"\n[2/4] 检测反转点 (lookback={lookback}, confirm_local={confirm_local})...")
 
